@@ -25,6 +25,9 @@ import (
 
 	"cloud.google.com/go/spanner"
 	"github.com/GoogleChrome/webstatus.dev/lib/gcpspanner/searchtypes"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/api/iterator"
 )
 
@@ -94,6 +97,29 @@ type FeatureResultPage struct {
 	Total         int64
 	NextPageToken *string
 	Features      []FeatureResult
+}
+
+var meter = otel.Meter("webstatus.dev")
+
+// Define the search query counter
+var searchQueryCounter metric.Int64Counter
+
+// `init()` runs automatically before `main()`
+func init() {
+	var err error
+	searchQueryCounter, err = meter.Int64Counter("search.query.count",
+		metric.WithDescription("Counts the number of search queries executed"),
+	)
+	if err != nil {
+		panic(err) // Fail fast if metric initialization fails
+	}
+}
+
+// Track search query metric
+func trackSearchMetric(ctx context.Context, query string) {
+	searchQueryCounter.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("search.query", query),
+	))
 }
 
 func (c *Client) FeaturesSearch(
@@ -196,6 +222,10 @@ func (c *Client) getFeatureResult(
 	pageSize int,
 	txn *spanner.ReadOnlyTransaction) ([]FeatureResult, error) {
 	stmt := queryBuilder.Build(filter, sortOrder, pageSize)
+
+	// Emit OpenTelemetry metric
+	searchQuery := stmt.SQL // Extract the SQL query (or modify based on actual input)
+	trackSearchMetric(ctx, searchQuery)
 
 	it := txn.Query(ctx, stmt)
 	defer it.Stop()
